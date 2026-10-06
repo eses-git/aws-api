@@ -8,6 +8,14 @@ from pypdf import PdfReader
 DYNAMODB_TABLE = os.environ.get("DYNAMODB_TABLE_NAME", "ai-document-summaries")
 AWS_REGION = os.environ.get("AWS_REGION", "eu-north-1")
 
+# Bedrock output budget. Raised from the previous 300 tokens so Claude can
+# return a complete summary (two full paragraphs) without being cut off.
+MAX_SUMMARY_TOKENS = 1500
+
+# Characters of source text handed to Bedrock. Raised from 4,000 so larger
+# documents are summarized from their full body instead of a short excerpt.
+MAX_INPUT_CHARS = 12000
+
 s3_client = boto3.client("s3", region_name=AWS_REGION)
 bedrock_runtime = boto3.client("bedrock-runtime", region_name=AWS_REGION)
 dynamodb = boto3.resource("dynamodb", region_name=AWS_REGION)
@@ -38,12 +46,14 @@ def generate_ai_summary(text_content, file_name):
     prompt = (
         f"Summarize the following document content in 2 concise paragraphs. "
         f"Highlight key background, skills, or findings:\n\n"
-        f"{text_content[:4000]}"
+        f"{text_content[:MAX_INPUT_CHARS]}"
     )
 
+    # max_tokens is no longer clamped at 300, so the full summary is returned
+    # and stored instead of being truncated mid-sentence.
     payload = {
         "anthropic_version": "bedrock-2023-05-31",
-        "max_tokens": 300,
+        "max_tokens": MAX_SUMMARY_TOKENS,
         "messages": [{"role": "user", "content": prompt}]
     }
 
