@@ -1,31 +1,128 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
-Description: Standard AWS SAM Application Template
+
+Description: AWS SAM Serverless AI Document Summarizer Backend
 
 Globals:
   Function:
-    Timeout: 10
-    MemorySize: 128
+    Timeout: 30
+    MemorySize: 512
     LoggingConfig:
       LogFormat: JSON
 
+  Api:
+    Cors:
+      AllowMethods: "'GET,POST,OPTIONS,PUT,DELETE'"
+      AllowHeaders: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+      AllowOrigin: "'*'"
+
 Resources:
+
+  DocumentStorageBucket:
+    Type: AWS::S3::Bucket
+    DependsOn:
+      - SummaryWorkerFunctionPermission
+    Properties:
+      BucketName: estera-ai-doc-summarizer-storage
+      CorsConfiguration:
+        CorsRules:
+          - AllowedHeaders:
+              - "*"
+            AllowedMethods:
+              - GET
+              - PUT
+              - POST
+              - HEAD
+              - DELETE
+            AllowedOrigins:
+              - "*"
+            ExposedHeaders:
+              - ETag
+            MaxAge: 3000
+      NotificationConfiguration:
+        LambdaConfigurations:
+          - Event: s3:ObjectCreated:*
+            Function: !GetAtt SummaryWorkerFunction.Arn
+            Filter:
+              S3Key:
+                Rules:
+                  - Name: prefix
+                    Value: uploads/
+
+  SummariesTable:
+    Type: AWS::Serverless::SimpleTable
+    Properties:
+      TableName: ai-document-summaries
+      PrimaryKey:
+        Name: id
+        Type: String
+
   ApiFunction:
     Type: AWS::Serverless::Function
     Properties:
       CodeUri: src/
       Handler: app.lambda_handler
-      Runtime: python3.11
+      Runtime: python3.14
       Architectures:
         - x86_64
+      Environment:
+        Variables:
+          UPLOAD_BUCKET_NAME: estera-ai-doc-summarizer-storage
+          DYNAMODB_TABLE_NAME: !Ref SummariesTable
+      Policies:
+        - S3CrudPolicy:
+            BucketName: estera-ai-doc-summarizer-storage
+        - DynamoDBCrudPolicy:
+            TableName: !Ref SummariesTable
       Events:
-        GetRoot:
+        RootApi:
           Type: Api
           Properties:
             Path: /
-            Method: get
+            Method: ANY
+        ProxyApi:
+          Type: Api
+          Properties:
+            Path: /{proxy+}
+            Method: ANY
+
+  SummaryWorkerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/
+      Handler: worker.lambda_handler
+      Runtime: python3.14
+      Architectures:
+        - x86_64
+      Environment:
+        Variables:
+          DYNAMODB_TABLE_NAME: !Ref SummariesTable
+      Policies:
+        - S3ReadPolicy:
+            BucketName: estera-ai-doc-summarizer-storage
+        - DynamoDBCrudPolicy:
+            TableName: !Ref SummariesTable
+        - Statement:
+            - Effect: Allow
+              Action:
+                - bedrock:InvokeModel
+              Resource: "*"
+
+  SummaryWorkerFunctionPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref SummaryWorkerFunction
+      Principal: s3.amazonaws.com
+      SourceArn: !Sub "arn:aws:s3:::estera-ai-doc-summarizer-storage"
 
 Outputs:
   ApiEndpoint:
-    Description: "API Gateway Endpoint URL"
+    Description: API Gateway Endpoint URL
     Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/"
+  S3BucketName:
+    Description: Document Storage S3 Bucket Name
+    Value: !Ref DocumentStorageBucket
+  DynamoDBTableName:
+    Description: Summaries DynamoDB Table Name
+    Value: !Ref SummariesTable

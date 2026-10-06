@@ -1,1 +1,2 @@
-# Add Python dependencies here (e.g. requests==2.31.0)
+pypdf
+boto3
